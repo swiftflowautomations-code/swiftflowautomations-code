@@ -109,6 +109,11 @@ The repository includes a GitHub Actions workflow for daily data updates. The wo
 `api/swiftflow_puller.py` reads newly registered domains from `data/daily`, enriches
 them, filters and deduplicates the results, then POSTs batches to a SwiftFlow webhook.
 
+The web dashboard uses its own keyless research pipeline. It combines the bundled new
+domain feed, domains pasted into the UI, and optional public feed URLs from
+`LEAD_SOURCE_URLS`. It reads public website metadata and visible business contact
+details directly; no enrichment API key is required.
+
 ```bash
 export ABSTRACT_API_COMPANY_ENRICHMENT_API_KEY="..."
 export SWIFTFLOW_WEBHOOK_URL="https://your-swiftflow-webhook"
