@@ -1,13 +1,28 @@
-FROM python:3.12.1
-#RUN apt update -y && apt install nodejs npm -y 
-RUN curl -sL https://deb.nodesource.com/setup_21.x -o nodesource_setup.sh
-RUN ["sh",  "./nodesource_setup.sh"]
-RUN apt-get install nodejs -y
-WORKDIR app
+FROM node:20-alpine AS dependencies
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN npm install -g pnpm
-RUN pnpm install
-RUN pip install spacy
-RUN python -m spacy download en_core_web_md
-RUN pip install -r requirements.txt
-CMD ["pnpm","run","dev"]
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate && pnpm build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/data/daily ./data/daily
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+USER nextjs
+EXPOSE 3000
+CMD ["./node_modules/.bin/next", "start", "-H", "0.0.0.0", "-p", "3000"]
