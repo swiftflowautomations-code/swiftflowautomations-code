@@ -1,9 +1,4 @@
 import { createHash, createHmac } from 'crypto'
-import { promises as dns } from 'dns'
-import { promises as fs } from 'fs'
-import net from 'net'
-import path from 'path'
-import { gunzipSync } from 'zlib'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -39,32 +34,6 @@ const emptyLead = (name: string, source: string): Lead => ({
 })
 
 function cleanDomain(value: string) { try { return new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '') } catch { return '' } }
-function displayName(domain: string) { return domain.split('.')[0].replace(/[-_]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase()) }
-function uniqueDomains(values: string[]) { return Array.from(new Set(values.map(cleanDomain).filter(domain => domain.includes('.')))) }
-function isPrivateIp(ip: string) { return net.isIPv4(ip) ? /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) : ip === '::1' || /^(fc|fd|fe80:)/i.test(ip) }
-async function publicHostname(hostname: string) { try { const records = await dns.lookup(hostname, { all: true }); return records.length > 0 && records.every(record => !isPrivateIp(record.address)) } catch { return false } }
-function textContent(html: string) { return html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim() }
-function meta(html: string, key: string) { const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); for (const pattern of [new RegExp(`<meta[^>]+(?:name|property)=["']${escaped}["'][^>]+content=["']([^"']+)["']`, 'i'), new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']${escaped}["']`, 'i')]) { const match = html.match(pattern); if (match) return match[1].trim() } return null }
-
-async function dailyDomains() { try { const directory = path.join(process.cwd(), 'data', 'daily'); const files = (await fs.readdir(directory)).filter(file => file.endsWith('.gz')).sort().reverse(); const values: string[] = []; for (const file of files) values.push(...gunzipSync(await fs.readFile(path.join(directory, file))).toString('utf8').split(/\r?\n/)); return uniqueDomains(values) } catch { return [] } }
-
-async function enrichWebsite(domain: string, source: string): Promise<Lead> {
-  const base = { ...emptyLead(displayName(domain), source), domain, website: `https://${domain}` }
-  if (!(await publicHostname(domain))) return base
-  for (const protocol of ['https', 'http']) try {
-    const response = await fetch(`${protocol}://${domain}`, { redirect: 'follow', signal: AbortSignal.timeout(6000), headers: { 'User-Agent': 'SwiftFlowLeadResearch/1.0' } })
-    if (!response.ok || !(response.headers.get('content-type') || '').includes('text/html')) continue
-    const html = (await response.text()).slice(0, 750_000), text = textContent(html).slice(0, 30_000)
-    const title = meta(html, 'og:title') || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim(), description = meta(html, 'description') || meta(html, 'og:description')
-    const email = html.match(/mailto:([^?"'\s>]+)/i)?.[1] || text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || null
-    const phone = html.match(/tel:([^?"'\s>]+)/i)?.[1]?.replace(/%20/g, ' ') || null
-    const linkedinUrl = html.match(/https?:\/\/(?:[a-z]+\.)?linkedin\.com\/(?:company|in)\/[^"'\s<]+/i)?.[0] || null
-    const haystack = ` ${title || ''} ${description || ''} ${text.slice(0, 5000)} `.toLowerCase()
-    const industry = Object.entries(industryTerms).find(([, terms]) => terms.some(term => haystack.includes(term)))?.[0] || null
-    return { ...base, name: title?.split(/[|–—-]/)[0].trim() || base.name, website: response.url, description: description?.slice(0, 280) || null, industry, email, phone, linkedinUrl, status: 'enriched' }
-  } catch { /* fallback */ }
-  return base
-}
 
 async function googlePlaces(niche: string, location: string, limit: number): Promise<Lead[]> {
   const key = process.env.GOOGLE_PLACES_API_KEY
@@ -92,32 +61,21 @@ function parseSunbiz(text: string, niche: string): Lead[] {
 
 async function sunbizLeads(niche: string) {
   const urls = (process.env.SUNBIZ_DAILY_URLS || '').split(',').map(v => v.trim()).filter(Boolean).slice(0, 7), leads: Lead[] = []
-  for (const value of urls) try { const url = new URL(value); if (!['https:', 'http:'].includes(url.protocol) || !(await publicHostname(url.hostname))) continue; const headers: Record<string,string> = {}; if (process.env.SUNBIZ_BASIC_AUTH) headers.Authorization = `Basic ${Buffer.from(process.env.SUNBIZ_BASIC_AUTH).toString('base64')}`; const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) }); if (response.ok) leads.push(...parseSunbiz((await response.text()).slice(0, 15_000_000), niche)) } catch { /* optional source */ }
+  for (const value of urls) try { const url = new URL(value); if (!['https:', 'http:'].includes(url.protocol)) continue; const headers: Record<string,string> = {}; if (process.env.SUNBIZ_BASIC_AUTH) headers.Authorization = `Basic ${Buffer.from(process.env.SUNBIZ_BASIC_AUTH).toString('base64')}`; const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) }); if (response.ok) leads.push(...parseSunbiz((await response.text()).slice(0, 15_000_000), niche)) } catch { /* optional source */ }
   return leads
-}
-
-async function kasprLeads(niche: string, location: string, limit: number) {
-  if (!process.env.KASPR_API_KEY || !process.env.KASPR_API_URL) return [] as Lead[]
-  const response = await fetch(process.env.KASPR_API_URL, { method: 'POST', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.KASPR_API_KEY}` }, body: JSON.stringify({ query: niche, location, limit }) })
-  if (!response.ok) throw new Error(`Kaspr returned ${response.status}`)
-  const data = await response.json(), records = Array.isArray(data) ? data : data.leads || data.results || []
-  return records.slice(0, limit).map((item: any) => ({ ...emptyLead(item.companyName || item.name || 'Kaspr lead', 'Kaspr'), domain: cleanDomain(item.domain || item.website || ''), website: item.website || '', industry: item.industry || niche || null, email: item.email || null, phone: item.phone || item.phoneNumber || null, linkedinUrl: item.linkedinUrl || item.linkedin || null, address: item.address || null, status: 'enriched' as const }))
 }
 
 async function deliver(leads: Lead[]) { const webhook = process.env.SWIFTFLOW_WEBHOOK_URL; if (!webhook) return { delivered: false, reason: 'Add SWIFTFLOW_WEBHOOK_URL to enable delivery.' }; const payload = JSON.stringify({ event: 'leads.created', leads }), headers: Record<string,string> = { 'Content-Type': 'application/json', 'Idempotency-Key': createHash('sha256').update(payload).digest('hex') }; if (process.env.SWIFTFLOW_WEBHOOK_SECRET) headers['X-SwiftFlow-Signature'] = `sha256=${createHmac('sha256', process.env.SWIFTFLOW_WEBHOOK_SECRET).update(payload).digest('hex')}`; const response = await fetch(webhook, { method: 'POST', headers, body: payload, signal: AbortSignal.timeout(15000) }); if (!response.ok) throw new Error(`SwiftFlow returned ${response.status}`); return { delivered: true } }
 
-export async function GET() { return NextResponse.json({ ok: true, connectors: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY), kaspr: Boolean(process.env.KASPR_API_KEY && process.env.KASPR_API_URL), websites: true } }) }
+export async function GET() { return NextResponse.json({ ok: true, connectors: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) } }) }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({})), limit = Math.min(Math.max(Number(body.limit) || 10, 1), 50), niche = String(body.industry || '').toLowerCase().trim(), location = String(body.location || 'Florida').trim()
-    const enabled = { websites: body.sources?.websites !== false, sunbiz: body.sources?.sunbiz !== false, google: body.sources?.google !== false, kaspr: Boolean(body.sources?.kaspr) }
-    const pasted = uniqueDomains(String(body.domains || '').split(/[\s,;]+/)), daily = enabled.websites ? await dailyDomains() : []
-    const webDomains = uniqueDomains([...pasted, ...daily]).slice(0, limit), webLeads: Lead[] = []
-    for (let offset = 0; offset < webDomains.length; offset += 5) webLeads.push(...await Promise.all(webDomains.slice(offset, offset + 5).map(domain => enrichWebsite(domain, pasted.includes(domain) ? 'Imported' : 'New domain feed'))))
-    const [sunbiz, google, kaspr] = await Promise.all([enabled.sunbiz ? sunbizLeads(niche) : [], enabled.google ? googlePlaces(niche, location, limit) : [], enabled.kaspr ? kasprLeads(niche, location, limit) : []])
+    const enabled = { sunbiz: body.sources?.sunbiz !== false, google: body.sources?.google !== false }
+    const [sunbiz, google] = await Promise.all([enabled.sunbiz ? sunbizLeads(niche) : [], enabled.google ? googlePlaces(niche, location, limit) : []])
     const minRating = Number(body.minRating) || 0, minReviews = Number(body.minReviews) || 0, filing = String(body.filing || 'all')
-    const seen = new Set<string>(), leads = [...google, ...sunbiz, ...kaspr, ...webLeads].filter(lead => {
+    const seen = new Set<string>(), leads = [...google, ...sunbiz].filter(lead => {
       if (filing === 'new' && lead.filingType && !lead.filingType.startsWith('New')) return false
       if (filing === 'renewal' && lead.filingType && !lead.filingType.startsWith('Renewal')) return false
       if (lead.rating !== null && lead.rating < minRating || lead.reviewCount !== null && lead.reviewCount < minReviews) return false
@@ -125,6 +83,6 @@ export async function POST(request: NextRequest) {
       const key = lead.domain || `${lead.name}:${lead.address || ''}`.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true
     }).slice(0, limit)
     const delivery = body.deliver ? await deliver(leads) : { delivered: false, reason: 'Delivery off' }
-    return NextResponse.json({ leads, discovered: webDomains.length + sunbiz.length + google.length + kaspr.length, enriched: leads.filter(l => l.status === 'enriched').length, sources: { websites: webLeads.length, sunbiz: sunbiz.length, googlePlaces: google.length, kaspr: kaspr.length }, configured: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY), kaspr: Boolean(process.env.KASPR_API_KEY && process.env.KASPR_API_URL) }, delivery })
+    return NextResponse.json({ leads, discovered: sunbiz.length + google.length, enriched: leads.filter(l => l.status === 'enriched').length, sources: { sunbiz: sunbiz.length, googlePlaces: google.length }, configured: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) }, delivery })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Lead pull failed' }, { status: 500 }) }
 }

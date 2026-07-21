@@ -7,11 +7,11 @@ type Lead = { id: string; name: string; domain: string; website: string; descrip
 const presets = ['Landscaping', 'Beauty salon', 'Pressure washing', 'Roofing', 'HVAC', 'Cleaning']
 
 export default function Home() {
-  const [leads, setLeads] = useState<Lead[]>([]), [domains, setDomains] = useState(''), [query, setQuery] = useState('')
+  const [leads, setLeads] = useState<Lead[]>([]), [query, setQuery] = useState('')
   const [industry, setIndustry] = useState('Landscaping'), [location, setLocation] = useState('Orlando, FL'), [limit, setLimit] = useState(25)
   const [minRating, setMinRating] = useState(0), [minReviews, setMinReviews] = useState(0), [filing, setFiling] = useState('all')
   const [hasPhone, setHasPhone] = useState(false), [hasWebsite, setHasWebsite] = useState(false), [deliver, setDeliver] = useState(false)
-  const [sources, setSources] = useState({ google: true, sunbiz: true, websites: true, kaspr: false })
+  const [sources, setSources] = useState({ google: true, sunbiz: true })
   const [loading, setLoading] = useState(false), [message, setMessage] = useState('Choose a service and location to begin.')
   const [stats, setStats] = useState({ discovered: 0, enriched: 0, sources: 0 })
   const visible = useMemo(() => leads.filter(lead => !query || JSON.stringify(lead).toLowerCase().includes(query.toLowerCase())), [leads, query])
@@ -19,10 +19,10 @@ export default function Home() {
   const pull = async (event: FormEvent) => {
     event.preventDefault(); setLoading(true); setMessage('Searching selected sources…')
     try {
-      const response = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domains, industry, location, limit, minRating, minReviews, filing, hasPhone, hasWebsite, sources, deliver }) })
+      const response = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ industry, location, limit, minRating, minReviews, filing, hasPhone, hasWebsite, sources, deliver }) })
       const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Search failed')
       setLeads(data.leads || []); setStats({ discovered: data.discovered || 0, enriched: data.enriched || 0, sources: Object.values(data.sources || {}).filter(Number).length })
-      const missing = [sources.google && !data.configured?.googlePlaces ? 'Google Places' : '', sources.sunbiz && !data.configured?.sunbiz ? 'Sunbiz feed' : '', sources.kaspr && !data.configured?.kaspr ? 'Kaspr' : ''].filter(Boolean)
+      const missing = [sources.google && !data.configured?.googlePlaces ? 'Google Places' : '', sources.sunbiz && !data.configured?.sunbiz ? 'Sunbiz feed' : ''].filter(Boolean)
       setMessage(`${data.leads.length} leads ready.${missing.length ? ` Configure ${missing.join(', ')} to activate those sources.` : ''}`)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Search failed') } finally { setLoading(false) }
   }
@@ -32,18 +32,17 @@ export default function Home() {
 
   return <main className="simple-shell">
     <header className="simple-header"><a className="simple-brand" href="#"><span><BoltIcon /></span>SwiftFlow</a><div className="keyless-badge"><CheckCircleIcon /> Public-data ready</div></header>
-    <section className="simple-hero"><p>LOCAL LEAD DISCOVERY</p><h1>Find service businesses.<br /><span>Build your pipeline.</span></h1><div className="source-line"><GlobeAltIcon /> Sunbiz filings · Google Places · Kaspr · Public websites</div></section>
+    <section className="simple-hero"><p>LOCAL LEAD DISCOVERY</p><h1>Find service businesses.<br /><span>Build your pipeline.</span></h1><div className="source-line"><GlobeAltIcon /> Sunbiz filings · Google Places</div></section>
     <section className="simple-workspace">
       <form className="simple-form" onSubmit={pull}>
         <div className="simple-form-head"><div><h2>New search</h2><p>Pick a niche, area, and sources.</p></div><span className="live-dot">Live</span></div>
         <label>Service category</label><div className="preset-grid">{presets.map(item => <button type="button" key={item} className={industry === item ? 'active' : ''} onClick={() => setIndustry(item)}>{item}</button>)}</div>
         <label>Custom category<input value={industry} onChange={event => setIndustry(event.target.value)} placeholder="e.g. pool cleaning" /></label>
         <label>Location<div className="input-icon"><MapPinIcon /><input value={location} onChange={event => setLocation(event.target.value)} placeholder="City, state or ZIP" /></div></label>
-        <label>Sources</label><div className="source-toggles">{([['google','Google Maps'],['sunbiz','Sunbiz'],['websites','Websites'],['kaspr','Kaspr']] as const).map(([key,label]) => <button type="button" key={key} className={sources[key] ? 'active' : ''} onClick={() => toggleSource(key)}><i />{label}</button>)}</div>
+        <label>Sources</label><div className="source-toggles">{([['google','Google Maps'],['sunbiz','Sunbiz']] as const).map(([key,label]) => <button type="button" key={key} className={sources[key] ? 'active' : ''} onClick={() => toggleSource(key)}><i />{label}</button>)}</div>
         <div className="filter-grid"><label>Minimum rating<select value={minRating} onChange={e => setMinRating(Number(e.target.value))}><option value="0">Any</option><option value="3">3.0+</option><option value="4">4.0+</option><option value="4.5">4.5+</option></select></label><label>Minimum reviews<select value={minReviews} onChange={e => setMinReviews(Number(e.target.value))}><option value="0">Any</option><option value="5">5+</option><option value="20">20+</option><option value="50">50+</option></select></label></div>
         <div className="filter-grid"><label>Sunbiz filing<select value={filing} onChange={e => setFiling(e.target.value)}><option value="all">New + renewal</option><option value="new">New only</option><option value="renewal">Renewals only</option></select></label><label>Maximum<select value={limit} onChange={e => setLimit(Number(e.target.value))}><option>10</option><option>25</option><option>50</option></select></label></div>
         <div className="check-row"><button type="button" className={hasPhone ? 'active' : ''} onClick={() => setHasPhone(v => !v)}>Has phone</button><button type="button" className={hasWebsite ? 'active' : ''} onClick={() => setHasWebsite(v => !v)}>Has website</button></div>
-        <details><summary>Add a domain list</summary><textarea value={domains} onChange={event => setDomains(event.target.value)} placeholder={'acme.com\nexample.org'} /></details>
         <button type="button" className={`delivery-compact ${deliver ? 'on' : ''}`} onClick={() => setDeliver(v => !v)}><PaperAirplaneIcon /> Send results to SwiftFlow <i /></button>
         <button className="simple-primary" disabled={loading}>{loading ? <><ArrowPathIcon className="spin" /> Searching…</> : <><MagnifyingGlassIcon /> Find leads</>}</button><p className="simple-message">{message}</p>
       </form>
