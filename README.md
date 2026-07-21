@@ -2,7 +2,7 @@
 
 ## SwiftFlow local lead search
 
-The dashboard now searches only Sunbiz filings and Google Places, with fast presets for landscaping, beauty salons, pressure washing, roofing, HVAC, and cleaning. Configure `SUNBIZ_DAILY_URLS` and `GOOGLE_PLACES_API_KEY` as documented in `.env.example`.
+The dashboard now searches only Sunbiz filings and Google Places, with fast presets for landscaping, beauty salons, pressure washing, roofing, HVAC, and cleaning. Sunbiz connects directly to Florida's published public SFTP service. Configure `GOOGLE_PLACES_API_KEY` to activate Google cross-referencing.
 
 **V2 development underway.** Preview available — email [contact@isaacbell.io](mailto:contact@isaacbell.io).
 

@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import SftpClient from 'ssh2-sftp-client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,14 +61,22 @@ function parseSunbiz(text: string, niche: string): Lead[] {
 }
 
 async function sunbizLeads(niche: string) {
-  const urls = (process.env.SUNBIZ_DAILY_URLS || '').split(',').map(v => v.trim()).filter(Boolean).slice(0, 7), leads: Lead[] = []
-  for (const value of urls) try { const url = new URL(value); if (!['https:', 'http:'].includes(url.protocol)) continue; const headers: Record<string,string> = {}; if (process.env.SUNBIZ_BASIC_AUTH) headers.Authorization = `Basic ${Buffer.from(process.env.SUNBIZ_BASIC_AUTH).toString('base64')}`; const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) }); if (response.ok) leads.push(...parseSunbiz((await response.text()).slice(0, 15_000_000), niche)) } catch { /* optional source */ }
+  const client = new SftpClient(), leads: Lead[] = []
+  try {
+    await client.connect({ host: process.env.SUNBIZ_SFTP_HOST || 'sftp.floridados.gov', port: 22, username: process.env.SUNBIZ_SFTP_USERNAME || 'Public', password: process.env.SUNBIZ_SFTP_PASSWORD || 'PubAccess1845!', readyTimeout: 15000 })
+    const files = (await client.list('doc/cor')).filter(file => /^\d{8}c\.txt$/i.test(file.name)).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 5)
+    for (const file of files) {
+      const contents = await client.get(`doc/cor/${file.name}`)
+      leads.push(...parseSunbiz(Buffer.isBuffer(contents) ? contents.toString('utf8') : String(contents), niche).map(lead => ({ ...lead, filingDate: `${file.name.slice(0,4)}-${file.name.slice(4,6)}-${file.name.slice(6,8)}` })))
+      if (leads.length >= 250) break
+    }
+  } finally { await client.end().catch(() => undefined) }
   return leads
 }
 
 async function deliver(leads: Lead[]) { const webhook = process.env.SWIFTFLOW_WEBHOOK_URL; if (!webhook) return { delivered: false, reason: 'Add SWIFTFLOW_WEBHOOK_URL to enable delivery.' }; const payload = JSON.stringify({ event: 'leads.created', leads }), headers: Record<string,string> = { 'Content-Type': 'application/json', 'Idempotency-Key': createHash('sha256').update(payload).digest('hex') }; if (process.env.SWIFTFLOW_WEBHOOK_SECRET) headers['X-SwiftFlow-Signature'] = `sha256=${createHmac('sha256', process.env.SWIFTFLOW_WEBHOOK_SECRET).update(payload).digest('hex')}`; const response = await fetch(webhook, { method: 'POST', headers, body: payload, signal: AbortSignal.timeout(15000) }); if (!response.ok) throw new Error(`SwiftFlow returned ${response.status}`); return { delivered: true } }
 
-export async function GET() { return NextResponse.json({ ok: true, connectors: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) } }) }
+export async function GET() { return NextResponse.json({ ok: true, connectors: { sunbiz: true, googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) } }) }
 
 export async function POST(request: NextRequest) {
   try {
@@ -83,6 +92,6 @@ export async function POST(request: NextRequest) {
       const key = lead.domain || `${lead.name}:${lead.address || ''}`.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true
     }).slice(0, limit)
     const delivery = body.deliver ? await deliver(leads) : { delivered: false, reason: 'Delivery off' }
-    return NextResponse.json({ leads, discovered: sunbiz.length + google.length, enriched: leads.filter(l => l.status === 'enriched').length, sources: { sunbiz: sunbiz.length, googlePlaces: google.length }, configured: { sunbiz: Boolean(process.env.SUNBIZ_DAILY_URLS), googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) }, delivery })
+    return NextResponse.json({ leads, discovered: sunbiz.length + google.length, enriched: leads.filter(l => l.status === 'enriched').length, sources: { sunbiz: sunbiz.length, googlePlaces: google.length }, configured: { sunbiz: true, googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) }, delivery })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Lead pull failed' }, { status: 500 }) }
 }

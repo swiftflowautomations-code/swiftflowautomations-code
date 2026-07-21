@@ -1,3 +1,5 @@
 allowBuilds:
   '@datastax/astra-db-ts': false
+  cpu-features: false
+  ssh2: false
   unrs-resolver: false
