@@ -1,5 +1,9 @@
 # LeadsDB
 
+## SwiftFlow local lead search
+
+The dashboard now includes fast searches for landscaping, beauty salons, pressure washing, roofing, HVAC, and cleaning. Public website research works without an enrichment key. Optional connectors use `SUNBIZ_DAILY_URLS`, `GOOGLE_PLACES_API_KEY`, and the authorized `KASPR_API_URL` / `KASPR_API_KEY` settings documented in `.env.example`.
+
 **V2 development underway.** Preview available — email [contact@isaacbell.io](mailto:contact@isaacbell.io).
 
 ![image](https://github.com/IsaacBell/leads-db/assets/2613157/5b5b3cf3-010f-40e1-a6a5-e1b03bdb6923)
