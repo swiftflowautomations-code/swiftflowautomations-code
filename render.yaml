@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: swiftflow-leads
+    runtime: node
+    plan: free
+    autoDeploy: true
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm exec next start -H 0.0.0.0 -p $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.5
+      - key: ABSTRACT_API_COMPANY_ENRICHMENT_API_KEY
+        sync: false
+      - key: ABSTRACT_API_COMPANY_ENRICHMENT_API_URL
+        value: https://companyenrichment.abstractapi.com/v1/
+      - key: SWIFTFLOW_WEBHOOK_URL
+        sync: false
+      - key: SWIFTFLOW_WEBHOOK_SECRET
+        generateValue: true

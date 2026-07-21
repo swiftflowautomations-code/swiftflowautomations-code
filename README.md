@@ -104,6 +104,32 @@ The backend is built with Flask and provides various API endpoints for company d
 
 The repository includes a GitHub Actions workflow for daily data updates. The workflow is defined in `.github/workflows/daily-updater.yml` and runs on a scheduled basis or can be triggered manually.
 
+## SwiftFlow lead puller
+
+`api/swiftflow_puller.py` reads newly registered domains from `data/daily`, enriches
+them, filters and deduplicates the results, then POSTs batches to a SwiftFlow webhook.
+
+```bash
+export ABSTRACT_API_COMPANY_ENRICHMENT_API_KEY="..."
+export SWIFTFLOW_WEBHOOK_URL="https://your-swiftflow-webhook"
+export SWIFTFLOW_WEBHOOK_SECRET="optional-shared-secret"
+python -m api.swiftflow_puller --industry automation --country US --limit 50
+```
+
+Use `--dry-run` to inspect the payload. Successful IDs are stored in
+`.swiftflow/seen.json`; use `--state-file` to select durable storage. Requests include
+an idempotency key and, when configured, an HMAC SHA-256 signature.
+
+### Deploy the dashboard on Render
+
+The included `render.yaml` deploys the Next.js dashboard and its server-side lead API
+as one web service. In Render, choose **New > Blueprint**, connect this repository,
+and select `render.yaml`. Render will prompt for the Abstract API and SwiftFlow webhook
+values marked `sync: false`; secrets are never stored in the repository.
+
+After deployment, validate the public URL, pull a small lead batch, and only then turn
+on **Deliver to SwiftFlow**.
+
 ## Todos
 
 - Use GCloud Build secret keys for the service account credential file

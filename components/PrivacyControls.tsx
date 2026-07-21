@@ -48,7 +48,7 @@ const PrivacyControls = () => {
       <Script
         strategy="afterInteractive"
         src="//cdn.iubenda.com/cs/iubenda_cs.js"
-        charset="UTF-8"
+        charSet="UTF-8"
         async
       />
     </>

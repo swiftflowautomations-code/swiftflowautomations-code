@@ -1,0 +1,3 @@
+allowBuilds:
+  '@datastax/astra-db-ts': false
+  unrs-resolver: false
