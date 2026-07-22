@@ -21,13 +21,6 @@ const niches: Record<string, string[]> = {
   cleaning: ['commercial cleaning', 'house cleaning service'],
 }
 
-const industryTerms: Record<string, string[]> = {
-  Landscaping: niches.landscaping, Beauty: niches['beauty salon'], 'Pressure Washing': niches['pressure washing'],
-  Roofing: niches.roofing, HVAC: niches.hvac, Cleaning: niches.cleaning,
-  Software: ['software', 'saas', 'cloud platform'], Marketing: ['marketing', 'advertising', 'seo'],
-  Construction: ['construction', 'contractor', 'building services'], Consulting: ['consulting', 'advisory'],
-}
-
 const emptyLead = (name: string, source: string): Lead => ({
   id: createHash('sha256').update(`${source}:${name}`).digest('hex').slice(0, 24), name, domain: '', website: '',
   description: null, industry: null, email: null, phone: null, linkedinUrl: null, address: null, rating: null,
@@ -36,19 +29,41 @@ const emptyLead = (name: string, source: string): Lead => ({
 
 function cleanDomain(value: string) { try { return new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '') } catch { return '' } }
 
-async function googlePlaces(niche: string, location: string, limit: number): Promise<Lead[]> {
+async function googlePlaceSearch(textQuery: string, limit: number): Promise<Lead[]> {
   const key = process.env.GOOGLE_PLACES_API_KEY
-  if (!key || !niche) return []
+  if (!key || !textQuery) return []
   const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
     method: 'POST', signal: AbortSignal.timeout(12000), headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.businessStatus,places.googleMapsUri,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,places.types' },
-    body: JSON.stringify({ textQuery: `${niche} in ${location || 'Florida'}`, pageSize: Math.min(limit, 20), includePureServiceAreaBusinesses: true }),
+    body: JSON.stringify({ textQuery, pageSize: Math.min(limit, 20), includePureServiceAreaBusinesses: true }),
   })
   if (!response.ok) throw new Error(`Google Places returned ${response.status}`)
   const data = await response.json()
   return (data.places || []).map((place: any) => {
     const website = place.websiteUri || '', domain = cleanDomain(website), lead = emptyLead(place.displayName?.text || 'Local business', 'Google Places')
-    return { ...lead, id: place.id || lead.id, domain, website, industry: niche, phone: place.nationalPhoneNumber || null, address: place.formattedAddress || null, rating: place.rating ?? null, reviewCount: place.userRatingCount ?? null, mapsUrl: place.googleMapsUri || null, description: place.businessStatus === 'OPERATIONAL' ? 'Operational business on Google Maps' : place.businessStatus || null, status: 'enriched' as const }
+    return { ...lead, id: place.id || lead.id, domain, website, phone: place.nationalPhoneNumber || null, address: place.formattedAddress || null, rating: place.rating ?? null, reviewCount: place.userRatingCount ?? null, mapsUrl: place.googleMapsUri || null, description: place.businessStatus === 'OPERATIONAL' ? 'Operational business on Google Maps' : place.businessStatus || null, status: 'enriched' as const }
   })
+}
+
+async function googlePlaces(niche: string, location: string, limit: number) {
+  return (await googlePlaceSearch(`${niche} in ${location || 'Florida'}`, limit)).map(lead => ({ ...lead, industry: niche }))
+}
+
+function normalizedName(value: string) { return value.toLowerCase().replace(/\b(llc|incorporated|inc|corp|corporation|company|co|ltd|pllc|lp)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim() }
+function nameScore(left: string, right: string) { const a = new Set(normalizedName(left).split(' ').filter(Boolean)), b = new Set(normalizedName(right).split(' ').filter(Boolean)); if (!a.size || !b.size) return 0; return Array.from(a).filter(token => b.has(token)).length / Math.max(a.size, b.size) }
+
+async function crosscheckSunbiz(leads: Lead[], location: string, maxLookups: number) {
+  if (!process.env.GOOGLE_PLACES_API_KEY) return { leads, matched: 0 }
+  const checked = leads.slice(0, Math.min(maxLookups, 10)), enriched: Lead[] = []
+  for (let offset = 0; offset < checked.length; offset += 3) {
+    const group = await Promise.all(checked.slice(offset, offset + 3).map(async filing => {
+      const candidates = await googlePlaceSearch(`"${filing.name}" in ${location || 'Florida'}`, 3).catch(() => [])
+      const match = candidates.map(candidate => ({ candidate, score: nameScore(filing.name, candidate.name) })).sort((a, b) => b.score - a.score)[0]
+      if (!match || match.score < 0.5) return filing
+      return { ...filing, ...match.candidate, id: filing.id, name: filing.name, industry: filing.industry, filingType: filing.filingType, filingDate: filing.filingDate, source: 'Sunbiz + Google', description: `Florida filing cross-checked against Google Places (${Math.round(match.score * 100)}% name match).`, status: 'enriched' as const }
+    }))
+    enriched.push(...group)
+  }
+  return { leads: [...enriched, ...leads.slice(checked.length)], matched: enriched.filter(lead => lead.source === 'Sunbiz + Google').length }
 }
 
 function parseSunbiz(text: string, niche: string): Lead[] {
@@ -82,7 +97,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({})), limit = Math.min(Math.max(Number(body.limit) || 10, 1), 50), niche = String(body.industry || '').toLowerCase().trim(), location = String(body.location || 'Florida').trim()
     const enabled = { sunbiz: body.sources?.sunbiz !== false, google: body.sources?.google !== false }
-    const [sunbiz, google] = await Promise.all([enabled.sunbiz ? sunbizLeads(niche) : [], enabled.google ? googlePlaces(niche, location, limit) : []])
+    const rawSunbiz = enabled.sunbiz ? await sunbizLeads(niche) : []
+    const crosschecked = enabled.google && enabled.sunbiz ? await crosscheckSunbiz(rawSunbiz, location, limit) : { leads: rawSunbiz, matched: 0 }
+    const google = enabled.google && !enabled.sunbiz ? await googlePlaces(niche, location, limit) : []
+    const sunbiz = crosschecked.leads
     const minRating = Number(body.minRating) || 0, minReviews = Number(body.minReviews) || 0, filing = String(body.filing || 'all')
     const seen = new Set<string>(), leads = [...google, ...sunbiz].filter(lead => {
       if (filing === 'new' && lead.filingType && !lead.filingType.startsWith('New')) return false
@@ -92,6 +110,6 @@ export async function POST(request: NextRequest) {
       const key = lead.domain || `${lead.name}:${lead.address || ''}`.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true
     }).slice(0, limit)
     const delivery = body.deliver ? await deliver(leads) : { delivered: false, reason: 'Delivery off' }
-    return NextResponse.json({ leads, discovered: sunbiz.length + google.length, enriched: leads.filter(l => l.status === 'enriched').length, sources: { sunbiz: sunbiz.length, googlePlaces: google.length }, configured: { sunbiz: true, googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) }, delivery })
+    return NextResponse.json({ leads, discovered: rawSunbiz.length + google.length, enriched: leads.filter(l => l.status === 'enriched').length, crosschecked: crosschecked.matched, sources: { sunbiz: rawSunbiz.length, googlePlaces: google.length + crosschecked.matched }, configured: { sunbiz: true, googlePlaces: Boolean(process.env.GOOGLE_PLACES_API_KEY) }, delivery })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Lead pull failed' }, { status: 500 }) }
 }

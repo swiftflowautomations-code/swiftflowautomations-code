@@ -13,7 +13,7 @@ export default function Home() {
   const [hasPhone, setHasPhone] = useState(false), [hasWebsite, setHasWebsite] = useState(false), [deliver, setDeliver] = useState(false)
   const [sources, setSources] = useState({ google: true, sunbiz: true })
   const [loading, setLoading] = useState(false), [message, setMessage] = useState('Choose a service and location to begin.')
-  const [stats, setStats] = useState({ discovered: 0, enriched: 0, sources: 0 })
+  const [stats, setStats] = useState({ discovered: 0, enriched: 0, crosschecked: 0 })
   const visible = useMemo(() => leads.filter(lead => !query || JSON.stringify(lead).toLowerCase().includes(query.toLowerCase())), [leads, query])
 
   const pull = async (event: FormEvent) => {
@@ -21,7 +21,7 @@ export default function Home() {
     try {
       const response = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ industry, location, limit, minRating, minReviews, filing, hasPhone, hasWebsite, sources, deliver }) })
       const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Search failed')
-      setLeads(data.leads || []); setStats({ discovered: data.discovered || 0, enriched: data.enriched || 0, sources: Object.values(data.sources || {}).filter(Number).length })
+      setLeads(data.leads || []); setStats({ discovered: data.discovered || 0, enriched: data.enriched || 0, crosschecked: data.crosschecked || 0 })
       const missing = [sources.google && !data.configured?.googlePlaces ? 'Google Places' : '', sources.sunbiz && !data.configured?.sunbiz ? 'Sunbiz feed' : ''].filter(Boolean)
       setMessage(`${data.leads.length} leads ready.${missing.length ? ` Configure ${missing.join(', ')} to activate those sources.` : ''}`)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Search failed') } finally { setLoading(false) }
@@ -39,7 +39,7 @@ export default function Home() {
         <label>Service category</label><div className="preset-grid">{presets.map(item => <button type="button" key={item} className={industry === item ? 'active' : ''} onClick={() => setIndustry(item)}>{item}</button>)}</div>
         <label>Custom category<input value={industry} onChange={event => setIndustry(event.target.value)} placeholder="e.g. pool cleaning" /></label>
         <label>Location<div className="input-icon"><MapPinIcon /><input value={location} onChange={event => setLocation(event.target.value)} placeholder="City, state or ZIP" /></div></label>
-        <label>Sources</label><div className="source-toggles">{([['google','Google Maps'],['sunbiz','Sunbiz']] as const).map(([key,label]) => <button type="button" key={key} className={sources[key] ? 'active' : ''} onClick={() => toggleSource(key)}><i />{label}</button>)}</div>
+        <label>Sources</label><div className="source-toggles">{([['sunbiz','Sunbiz filings'],['google','Google cross-check']] as const).map(([key,label]) => <button type="button" key={key} className={sources[key] ? 'active' : ''} onClick={() => toggleSource(key)}><i />{label}</button>)}</div><p className="filter-note">Google enriches up to 10 Sunbiz matches per search to control API usage.</p>
         <div className="filter-grid"><label>Minimum rating<select value={minRating} onChange={e => setMinRating(Number(e.target.value))}><option value="0">Any</option><option value="3">3.0+</option><option value="4">4.0+</option><option value="4.5">4.5+</option></select></label><label>Minimum reviews<select value={minReviews} onChange={e => setMinReviews(Number(e.target.value))}><option value="0">Any</option><option value="5">5+</option><option value="20">20+</option><option value="50">50+</option></select></label></div>
         <div className="filter-grid"><label>Sunbiz filing<select value={filing} onChange={e => setFiling(e.target.value)}><option value="all">New + renewal</option><option value="new">New only</option><option value="renewal">Renewals only</option></select></label><label>Maximum<select value={limit} onChange={e => setLimit(Number(e.target.value))}><option>10</option><option>25</option><option>50</option></select></label></div>
         <div className="check-row"><button type="button" className={hasPhone ? 'active' : ''} onClick={() => setHasPhone(v => !v)}>Has phone</button><button type="button" className={hasWebsite ? 'active' : ''} onClick={() => setHasWebsite(v => !v)}>Has website</button></div>
@@ -47,7 +47,7 @@ export default function Home() {
         <button className="simple-primary" disabled={loading}>{loading ? <><ArrowPathIcon className="spin" /> Searching…</> : <><MagnifyingGlassIcon /> Find leads</>}</button><p className="simple-message">{message}</p>
       </form>
       <div className="simple-results">
-        <div className="simple-results-head"><div><h2>Leads</h2><p>{stats.discovered.toLocaleString()} discovered · {stats.enriched} enriched · {stats.sources} active sources</p></div><div className="simple-actions"><div className="simple-search"><MagnifyingGlassIcon /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter results" /></div><button onClick={exportCsv}><ArrowDownTrayIcon /> Export</button></div></div>
+        <div className="simple-results-head"><div><h2>Leads</h2><p>{stats.discovered.toLocaleString()} filings · {stats.crosschecked} Google matched · {stats.enriched} enriched</p></div><div className="simple-actions"><div className="simple-search"><MagnifyingGlassIcon /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter results" /></div><button onClick={exportCsv}><ArrowDownTrayIcon /> Export</button></div></div>
         {!visible.length ? <div className="simple-empty"><span><PlusIcon /></span><h3>Your local leads will appear here</h3><p>Try Landscaping in Orlando, FL to start.</p></div> : <div className="simple-list">{visible.map(lead => <article key={`${lead.source}-${lead.id}`} className="simple-lead"><div className="simple-logo">{lead.name.slice(0,2).toUpperCase()}</div><div className="simple-company"><a href={lead.website || lead.mapsUrl || '#'} target="_blank" rel="noreferrer">{lead.name}</a><p>{lead.address || lead.domain || lead.filingType || 'Public business record'} · {lead.source}</p><small>{lead.description || lead.industry || 'Business details available from source.'}</small></div><div className="simple-contact"><span>{lead.rating ? <><StarIcon /> {lead.rating} ({lead.reviewCount || 0})</> : lead.industry || lead.filingType || 'Unclassified'}</span><a href={lead.phone ? `tel:${lead.phone}` : undefined}>{lead.phone || 'No public phone'}</a><small>{lead.email || ''}</small></div><div className={`simple-status ${lead.status}`}>{lead.source}</div></article>)}</div>}
       </div>
     </section><footer className="simple-footer">Use public business data responsibly and follow source terms and applicable outreach laws.</footer>
